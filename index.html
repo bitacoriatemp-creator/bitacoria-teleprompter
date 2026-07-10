@@ -473,20 +473,32 @@ Deja que la IA haga lo otro.`}
     document.getElementById("setupHint").textContent = "Este navegador no soporta grabar aquí — usa la app de Cámara junto a esta pantalla mientras lees.";
   }
 
-  var RECORD_W = 1080, RECORD_H = 1920, RECORD_FPS = 30;
+  var RECORD_FPS = 30;
+
+  // Sizes the recording canvas to match the on-screen stage's own aspect ratio (not a fixed 9:16),
+  // so the recording crops exactly what was visible while filming instead of a mismatched zoom/crop.
+  function sizeRecordCanvas(){
+    var aspect = stage.clientWidth / stage.clientHeight;
+    var h = 1920;
+    var w = Math.round(h * aspect);
+    if(w % 2) w += 1; // even dimensions avoid H.264 4:2:0 encoder issues
+    recCanvas.width = w;
+    recCanvas.height = h;
+  }
 
   // Draws the live camera frame onto the recording canvas using the same "cover" crop as the on-screen preview.
   function drawCoverFrame(){
     var vw = camPreview.videoWidth, vh = camPreview.videoHeight;
     if(!vw || !vh) return;
-    var srcRatio = vw/vh, dstRatio = RECORD_W/RECORD_H;
+    var dstRatio = recCanvas.width/recCanvas.height;
+    var srcRatio = vw/vh;
     var sx, sy, sw, sh;
     if(srcRatio > dstRatio){
       sh = vh; sw = vh*dstRatio; sx = (vw-sw)/2; sy = 0;
     } else {
       sw = vw; sh = vw/dstRatio; sx = 0; sy = (vh-sh)/2;
     }
-    recCtx.drawImage(camPreview, sx, sy, sw, sh, 0, 0, RECORD_W, RECORD_H);
+    recCtx.drawImage(camPreview, sx, sy, sw, sh, 0, 0, recCanvas.width, recCanvas.height);
   }
 
   function startDrawLoop(){
@@ -671,9 +683,10 @@ Deja que la IA haga lo otro.`}
     var recordStream = state.stream;
     var usingCanvas = false;
     // Recording the raw camera stream directly can come out rotated/non-portrait on iOS Safari;
-    // re-encoding via canvas guarantees upright 9:16 output regardless of container metadata bugs.
+    // re-encoding via canvas guarantees upright output matching the on-screen crop, regardless of container metadata bugs.
     if(typeof recCanvas.captureStream === "function"){
       try{
+        sizeRecordCanvas();
         state.canvasStream = recCanvas.captureStream(RECORD_FPS);
         recordStream = new MediaStream(
           state.canvasStream.getVideoTracks().concat(state.stream.getAudioTracks())

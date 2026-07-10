@@ -66,10 +66,13 @@
   /* ---------- STAGE (filming) ---------- */
   #stage{position:fixed; inset:0; display:none; background:#000;}
   #stage.show{display:block;}
-  #camPreview{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1);}
+  #camPreview{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; transform:scaleX(-1);}
   #camOff{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     color:var(--cream-dim); font-family:var(--mono); font-size:12px; text-align:center; padding:40px;}
   #recCanvas{position:absolute; left:0; top:0; width:1px; height:1px; opacity:0; pointer-events:none;}
+  #dbg{position:absolute; left:0; right:0; top:calc(52px + env(safe-area-inset-top)); text-align:center;
+    font-family:var(--mono); font-size:10px; letter-spacing:0.02em; color:var(--cobre-bright); opacity:0.85;
+    z-index:6; pointer-events:none; text-shadow:0 1px 3px rgba(0,0,0,.9);}
 
   #guide{position:absolute; left:0; right:0; top:38%; height:2px; background:linear-gradient(90deg,transparent,var(--cobre) 20%,var(--cobre) 80%,transparent);
     opacity:0.55; pointer-events:none;}
@@ -152,6 +155,7 @@
     <video id="camPreview" autoplay playsinline muted></video>
     <canvas id="recCanvas" width="1080" height="1920"></canvas>
     <div id="camOff">Cámara desactivada.<br>Usa tu app de Cámara junto a esta pantalla.</div>
+    <div id="dbg"></div>
     <div id="guide"></div>
     <div id="promptWrap"><div id="promptText"></div></div>
 
@@ -475,44 +479,62 @@ Deja que la IA haga lo otro.`}
 
   var RECORD_FPS = 30;
 
-  // Sizes the recording canvas to match the on-screen stage's own aspect ratio (not a fixed 9:16),
-  // so the recording crops exactly what was visible while filming instead of a mismatched zoom/crop.
-  function sizeRecordCanvas(){
-    var aspect = stage.clientWidth / stage.clientHeight;
-    var h = 1920;
-    var w = Math.round(h * aspect);
-    if(w % 2) w += 1; // even dimensions avoid H.264 4:2:0 encoder issues
-    recCanvas.width = w;
-    recCanvas.height = h;
+  var dbgEl = document.getElementById("dbg");
+  function updateDebug(){
+    if(!dbgEl) return;
+    var vw = camPreview.videoWidth || 0, vh = camPreview.videoHeight || 0;
+    var orient = vw && vh ? (vh >= vw ? "vertical" : "HORIZONTAL") : "-";
+    dbgEl.textContent = "cam " + vw + "x" + vh + " (" + orient + ")  ->  video " + recCanvas.width + "x" + recCanvas.height;
   }
 
-  // Draws the live camera frame onto the recording canvas using the same "cover" crop as the on-screen preview.
-  function drawCoverFrame(){
+  // Sizes the recording canvas so the WHOLE camera frame fits with no cropping.
+  // A vertical camera -> canvas matches its aspect exactly (fills, no bars).
+  // A horizontal camera -> a 9:16 vertical canvas, and the frame is letterboxed
+  // (bars top/bottom) instead of being zoom-cropped. Either way: no zoom.
+  function setupRecordCanvas(){
+    var vw = camPreview.videoWidth || 1080;
+    var vh = camPreview.videoHeight || 1920;
+    var w, h;
+    if(vh >= vw){
+      var scale = Math.min(1, 1920 / vh);
+      w = Math.round(vw * scale);
+      h = Math.round(vh * scale);
+    } else {
+      w = 1080; h = 1920;
+    }
+    if(w % 2) w += 1;   // even dimensions keep the H.264 encoder happy
+    if(h % 2) h += 1;
+    recCanvas.width = w;
+    recCanvas.height = h;
+    updateDebug();
+  }
+
+  // Draws the current camera frame FIT (contain) inside the canvas: full frame,
+  // centered, correct aspect ratio, no zoom. Any empty area is filled black.
+  function drawFrame(){
     var vw = camPreview.videoWidth, vh = camPreview.videoHeight;
     if(!vw || !vh) return;
-    var dstRatio = recCanvas.width/recCanvas.height;
-    var srcRatio = vw/vh;
-    var sx, sy, sw, sh;
-    if(srcRatio > dstRatio){
-      sh = vh; sw = vh*dstRatio; sx = (vw-sw)/2; sy = 0;
-    } else {
-      sw = vw; sh = vw/dstRatio; sx = 0; sy = (vh-sh)/2;
-    }
-    recCtx.drawImage(camPreview, sx, sy, sw, sh, 0, 0, recCanvas.width, recCanvas.height);
+    var cw = recCanvas.width, ch = recCanvas.height;
+    var scale = Math.min(cw/vw, ch/vh);
+    var dw = vw*scale, dh = vh*scale;
+    var dx = (cw-dw)/2, dy = (ch-dh)/2;
+    recCtx.fillStyle = "#000";
+    recCtx.fillRect(0, 0, cw, ch);
+    recCtx.drawImage(camPreview, 0, 0, vw, vh, dx, dy, dw, dh);
   }
 
   function startDrawLoop(){
     stopDrawLoop();
     if('requestVideoFrameCallback' in camPreview){
       var onFrame = function(){
-        drawCoverFrame();
+        drawFrame();
         state.drawHandle = camPreview.requestVideoFrameCallback(onFrame);
       };
       state.usingRVFC = true;
       state.drawHandle = camPreview.requestVideoFrameCallback(onFrame);
     } else {
       var onRaf = function(){
-        drawCoverFrame();
+        drawFrame();
         state.drawHandle = requestAnimationFrame(onRaf);
       };
       state.usingRVFC = false;
@@ -580,11 +602,13 @@ Deja que la IA haga lo otro.`}
     state.camAttempts++;
     try{
       var stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:"user", width:{ideal:1080}, height:{ideal:1920} },
+        video:{ facingMode:"user", width:{ideal:1080}, height:{ideal:1920}, aspectRatio:{ideal:9/16} },
         audio:true
       });
       camPreview.srcObject = stream;
+      camPreview.onloadedmetadata = updateDebug;
       camOff.style.display="none"; camPreview.style.display="block";
+      updateDebug();
       return stream;
     }catch(e){
       var btns = '<button class="save-btn primary" id="camRetryBtn" style="max-width:220px">Reintentar</button>'+
@@ -683,10 +707,10 @@ Deja que la IA haga lo otro.`}
     var recordStream = state.stream;
     var usingCanvas = false;
     // Recording the raw camera stream directly can come out rotated/non-portrait on iOS Safari;
-    // re-encoding via canvas guarantees upright output matching the on-screen crop, regardless of container metadata bugs.
+    // re-encoding via canvas guarantees upright output that fits the frame, with no zoom crop.
     if(typeof recCanvas.captureStream === "function"){
       try{
-        sizeRecordCanvas();
+        setupRecordCanvas();
         state.canvasStream = recCanvas.captureStream(RECORD_FPS);
         recordStream = new MediaStream(
           state.canvasStream.getVideoTracks().concat(state.stream.getAudioTracks())
@@ -710,7 +734,7 @@ Deja que la IA haga lo otro.`}
     state.recorder.onstop = function(){ handleStop(mime); };
     countdownThen(function(){
       state.starting = false;
-      if(usingCanvas){ drawCoverFrame(); startDrawLoop(); }
+      if(usingCanvas){ drawFrame(); startDrawLoop(); }
       state.recorder.start();
       state.recording = true;
       recBtn.classList.add("recording");

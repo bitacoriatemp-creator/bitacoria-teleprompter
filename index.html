@@ -69,6 +69,7 @@
   #camPreview{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1);}
   #camOff{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     color:var(--cream-dim); font-family:var(--mono); font-size:12px; text-align:center; padding:40px;}
+  #recCanvas{position:absolute; left:0; top:0; width:1px; height:1px; opacity:0; pointer-events:none;}
 
   #guide{position:absolute; left:0; right:0; top:38%; height:2px; background:linear-gradient(90deg,transparent,var(--cobre) 20%,var(--cobre) 80%,transparent);
     opacity:0.55; pointer-events:none;}
@@ -79,7 +80,6 @@
   #promptText{position:absolute; left:0; right:0; top:100%; padding:0 26px; text-align:center;
     font-family:var(--sans); font-weight:600; color:var(--cream); white-space:pre-wrap;
     text-shadow:0 2px 10px rgba(0,0,0,.85), 0 0 26px rgba(0,0,0,.6); line-height:1.5;}
-  #promptText.mirrored{transform:scaleX(-1);}
 
   .hud{position:absolute; left:0; right:0; top:0; display:flex; align-items:center; justify-content:space-between;
     padding:calc(12px + env(safe-area-inset-top)) 16px 8px; z-index:5;}
@@ -140,10 +140,6 @@
       <div class="val" id="fsizeVal">34</div>
     </div>
     <div class="row">
-      <div class="name">Espejo (rig con vidrio)</div>
-      <button class="toggle" id="mirrorToggle"></button>
-    </div>
-    <div class="row">
       <div class="name">Fondo: mi cámara</div>
       <button class="toggle on" id="camToggle"></button>
     </div>
@@ -154,6 +150,7 @@
 
   <div id="stage">
     <video id="camPreview" autoplay playsinline muted></video>
+    <canvas id="recCanvas" width="1080" height="1920"></canvas>
     <div id="camOff">Cámara desactivada.<br>Usa tu app de Cámara junto a esta pantalla.</div>
     <div id="guide"></div>
     <div id="promptWrap"><div id="promptText"></div></div>
@@ -396,7 +393,6 @@ Deja que la IA haga lo otro.`}
     custom: false,
     speed: 5,
     fsize: 34,
-    mirror: false,
     camOn: true,
     stream: null,
     recorder: null,
@@ -455,10 +451,6 @@ Deja que la IA haga lo otro.`}
   speedInput.oninput = function(){ state.speed = +speedInput.value; speedVal.textContent = state.speed; };
   fsizeInput.oninput = function(){ state.fsize = +fsizeInput.value; fsizeVal.textContent = state.fsize; document.getElementById("promptText").style.fontSize = state.fsize+"px"; };
 
-  var mirrorToggle = document.getElementById("mirrorToggle");
-  mirrorToggle.onclick = function(){ state.mirror = !state.mirror; mirrorToggle.classList.toggle("on", state.mirror);
-    document.getElementById("promptText").classList.toggle("mirrored", state.mirror); };
-
   var camToggle = document.getElementById("camToggle");
   camToggle.onclick = function(){ state.camOn = !state.camOn; camToggle.classList.toggle("on", state.camOn); };
 
@@ -473,10 +465,57 @@ Deja que la IA haga lo otro.`}
   var timerEl = document.getElementById("timer");
   var recBtn = document.getElementById("recBtn");
   var pauseBtn = document.getElementById("pauseBtn");
+  var recCanvas = document.getElementById("recCanvas");
+  var recCtx = recCanvas.getContext("2d");
 
   var supportsRecord = !!(navigator.mediaDevices && window.MediaRecorder);
   if(!supportsRecord){
     document.getElementById("setupHint").textContent = "Este navegador no soporta grabar aquí — usa la app de Cámara junto a esta pantalla mientras lees.";
+  }
+
+  var RECORD_W = 1080, RECORD_H = 1920, RECORD_FPS = 30;
+
+  // Draws the live camera frame onto the recording canvas using the same "cover" crop as the on-screen preview.
+  function drawCoverFrame(){
+    var vw = camPreview.videoWidth, vh = camPreview.videoHeight;
+    if(!vw || !vh) return;
+    var srcRatio = vw/vh, dstRatio = RECORD_W/RECORD_H;
+    var sx, sy, sw, sh;
+    if(srcRatio > dstRatio){
+      sh = vh; sw = vh*dstRatio; sx = (vw-sw)/2; sy = 0;
+    } else {
+      sw = vw; sh = vw/dstRatio; sx = 0; sy = (vh-sh)/2;
+    }
+    recCtx.drawImage(camPreview, sx, sy, sw, sh, 0, 0, RECORD_W, RECORD_H);
+  }
+
+  function startDrawLoop(){
+    stopDrawLoop();
+    if('requestVideoFrameCallback' in camPreview){
+      var onFrame = function(){
+        drawCoverFrame();
+        state.drawHandle = camPreview.requestVideoFrameCallback(onFrame);
+      };
+      state.usingRVFC = true;
+      state.drawHandle = camPreview.requestVideoFrameCallback(onFrame);
+    } else {
+      var onRaf = function(){
+        drawCoverFrame();
+        state.drawHandle = requestAnimationFrame(onRaf);
+      };
+      state.usingRVFC = false;
+      state.drawHandle = requestAnimationFrame(onRaf);
+    }
+  }
+  function stopDrawLoop(){
+    if(state.drawHandle){
+      if(state.usingRVFC) camPreview.cancelVideoFrameCallback(state.drawHandle);
+      else cancelAnimationFrame(state.drawHandle);
+    }
+    state.drawHandle = null;
+  }
+  function stopCanvasStream(){
+    if(state.canvasStream){ state.canvasStream.getTracks().forEach(function(tr){tr.stop();}); state.canvasStream = null; }
   }
 
   function fmtTime(ms){
@@ -586,7 +625,6 @@ Deja que la IA haga lo otro.`}
   document.getElementById("startBtn").onclick = async function(){
     promptText.textContent = currentBody();
     promptText.style.fontSize = state.fsize+"px";
-    promptText.classList.toggle("mirrored", state.mirror);
     setup.style.display = "none";
     stage.classList.add("show");
     state.paused = false;
@@ -595,10 +633,15 @@ Deja que la IA haga lo otro.`}
 
   document.getElementById("backBtn").onclick = function(){
     stopScroll();
-    if(state.recording) stopRecording(true);
-    if(state.stream){ state.stream.getTracks().forEach(function(tr){tr.stop();}); state.stream=null; }
-    stage.classList.remove("show");
-    setup.style.display = "block";
+    function leave(){
+      stopDrawLoop();
+      stopCanvasStream();
+      if(state.stream){ state.stream.getTracks().forEach(function(tr){tr.stop();}); state.stream=null; }
+      stage.classList.remove("show");
+      setup.style.display = "block";
+    }
+    if(state.recording){ stopRecording(true, leave); }
+    else { leave(); }
   };
 
   document.getElementById("restartBtn").onclick = function(){
@@ -618,20 +661,43 @@ Deja que la IA haga lo otro.`}
   function stopTimer(){ if(state.timerId) clearInterval(state.timerId); }
 
   function startRecording(){
+    if(state.starting || state.recording) return;
+    state.starting = true;
     if(!state.stream || !supportsRecord){
-      countdownThen(startScroll);
+      countdownThen(function(){ state.starting = false; startScroll(); });
       return;
     }
     var mime = pickMime();
+    var recordStream = state.stream;
+    var usingCanvas = false;
+    // Recording the raw camera stream directly can come out rotated/non-portrait on iOS Safari;
+    // re-encoding via canvas guarantees upright 9:16 output regardless of container metadata bugs.
+    if(typeof recCanvas.captureStream === "function"){
+      try{
+        state.canvasStream = recCanvas.captureStream(RECORD_FPS);
+        recordStream = new MediaStream(
+          state.canvasStream.getVideoTracks().concat(state.stream.getAudioTracks())
+        );
+        usingCanvas = true;
+      }catch(e){
+        stopCanvasStream();
+        recordStream = state.stream;
+        usingCanvas = false;
+      }
+    }
     try{
-      state.recorder = new MediaRecorder(state.stream, mime ? {mimeType:mime} : undefined);
+      state.recorder = new MediaRecorder(recordStream, mime ? {mimeType:mime} : undefined);
     }catch(e){
-      countdownThen(startScroll); return;
+      stopCanvasStream();
+      countdownThen(function(){ state.starting = false; startScroll(); });
+      return;
     }
     state.chunks = [];
     state.recorder.ondataavailable = function(e){ if(e.data && e.data.size>0) state.chunks.push(e.data); };
     state.recorder.onstop = function(){ handleStop(mime); };
     countdownThen(function(){
+      state.starting = false;
+      if(usingCanvas){ drawCoverFrame(); startDrawLoop(); }
       state.recorder.start();
       state.recording = true;
       recBtn.classList.add("recording");
@@ -641,17 +707,34 @@ Deja que la IA haga lo otro.`}
     });
   }
 
-  function stopRecording(silent){
+  // done() fires only once the recorder has actually finished flushing (or immediately if it was never active),
+  // so callers (e.g. backBtn) can safely wait before tearing down the camera stream / canvas stream tracks
+  // that the recorder may still be writing from.
+  function stopRecording(silent, done){
     state.recording = false;
     recBtn.classList.remove("recording");
     recDot.classList.remove("blink");
     stopTimer();
     stopScroll();
-    if(state.recorder && state.recorder.state!=="inactive"){ state.recorder.stop(); }
-    else if(!silent){ handleStop(""); }
+    stopDrawLoop();
+    if(state.recorder && state.recorder.state!=="inactive"){
+      var recorder = state.recorder;
+      var origOnStop = recorder.onstop;
+      recorder.onstop = function(){
+        if(origOnStop) origOnStop();
+        stopCanvasStream();
+        if(done) done();
+      };
+      recorder.stop();
+    } else {
+      if(!silent) handleStop("");
+      stopCanvasStream();
+      if(done) done();
+    }
   }
 
   recBtn.onclick = function(){
+    if(state.starting) return;
     if(state.recording){ stopRecording(false); }
     else { startRecording(); }
   };

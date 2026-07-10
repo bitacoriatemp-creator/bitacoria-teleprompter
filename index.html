@@ -164,7 +164,6 @@
 
     <div class="hud">
       <button class="hud-btn" id="backBtn">&larr; Volver</button>
-      <button class="hud-btn" id="rotateBtn">&#8635; Girar</button>
       <div class="hud-btn"><span class="rec-dot" id="recDot"></span><span id="timer">00:00</span></div>
     </div>
 
@@ -483,75 +482,34 @@ Deja que la IA haga lo otro.`}
 
   var RECORD_FPS = 30;
 
-  var ROT_KEY = "bitacoria_tp_rot_v1";
-  // Rotation applied to the recorded frame: 0 = fit (letterbox), 90 / 270 = rotate to fill 9:16.
-  state.rotation = 0;
-  try { var _r = parseInt(localStorage.getItem(ROT_KEY), 10); if(_r===0 || _r===90 || _r===270) state.rotation = _r; } catch(e){}
+  var OUT_W = 1080, OUT_H = 1920;   // fixed 9:16 vertical output (TikTok / Reels)
 
   var dbgEl = document.getElementById("dbg");
-  function rotLabel(){ return state.rotation === 0 ? "ajuste (barras)" : "girado " + state.rotation + "°"; }
   function updateDebug(){
     if(!dbgEl) return;
     var vw = camPreview.videoWidth || 0, vh = camPreview.videoHeight || 0;
-    var orient = vw && vh ? (vh >= vw ? "vertical" : "HORIZONTAL") : "-";
-    dbgEl.textContent = "cam " + vw + "x" + vh + " (" + orient + ")  |  " + rotLabel();
+    var orient = vw && vh ? (vh >= vw ? "vertical" : "horizontal") : "-";
+    dbgEl.textContent = "cam " + vw + "x" + vh + " (" + orient + ")  ->  9:16 " + recCanvas.width + "x" + recCanvas.height;
   }
 
-  // Sizes the recording canvas. Horizontal cameras -> a 1080x1920 vertical frame
-  // (the wide frame is rotated to fill it). Vertical cameras -> match their aspect.
+  // Fixed 9:16 (1080x1920) vertical output — the TikTok / Reels format.
   function setupRecordCanvas(){
-    var vw = camPreview.videoWidth || 1080;
-    var vh = camPreview.videoHeight || 1920;
-    var w, h;
-    if(vh >= vw){
-      var scale = Math.min(1, 1920 / vh);
-      w = Math.round(vw * scale);
-      h = Math.round(vh * scale);
-    } else {
-      w = 1080; h = 1920;
-    }
-    if(w % 2) w += 1;   // even dimensions keep the H.264 encoder happy
-    if(h % 2) h += 1;
-    recCanvas.width = w;
-    recCanvas.height = h;
+    recCanvas.width = OUT_W;
+    recCanvas.height = OUT_H;
     updateDebug();
   }
 
-  // Draws the current camera frame into the canvas.
-  //  rotation 0      -> fit the whole frame (contain); letterboxed if aspects differ.
-  //  rotation 90/270 -> rotate the frame and COVER the canvas: fills 9:16 with no bars and no zoom
-  //                     (a 1920x1080 frame rotated is exactly 1080x1920).
+  // Draws the camera frame to COVER the 9:16 canvas: fills it completely, centered
+  // and upright, with NO black bars. A wide (landscape) camera is cropped left/right
+  // to fit vertical — exactly how TikTok/Reels frame video. No rotation, no letterbox.
   function drawFrame(){
     var vw = camPreview.videoWidth, vh = camPreview.videoHeight;
     if(!vw || !vh) return;
     var cw = recCanvas.width, ch = recCanvas.height;
-    recCtx.save();
-    recCtx.fillStyle = "#000";
-    recCtx.fillRect(0, 0, cw, ch);
-    var rot = state.rotation || 0;
-    if(rot === 90 || rot === 270){
-      recCtx.translate(cw/2, ch/2);
-      recCtx.rotate(rot * Math.PI / 180);
-      // Axes swap after rotation: cover a (ch x cw) box with the frame.
-      var scale = Math.max(ch/vw, cw/vh);
-      var dw = vw*scale, dh = vh*scale;
-      recCtx.drawImage(camPreview, -dw/2, -dh/2, dw, dh);
-    } else {
-      var scale2 = Math.min(cw/vw, ch/vh);
-      var dw2 = vw*scale2, dh2 = vh*scale2;
-      recCtx.drawImage(camPreview, 0, 0, vw, vh, (cw-dw2)/2, (ch-dh2)/2, dw2, dh2);
-    }
-    recCtx.restore();
+    var scale = Math.max(cw/vw, ch/vh);   // cover: fill the whole frame
+    var dw = vw*scale, dh = vh*scale;
+    recCtx.drawImage(camPreview, (cw-dw)/2, (ch-dh)/2, dw, dh);
   }
-
-  var rotateBtn = document.getElementById("rotateBtn");
-  var ROT_CYCLE = [90, 270, 0];
-  rotateBtn.onclick = function(){
-    var i = ROT_CYCLE.indexOf(state.rotation);
-    state.rotation = ROT_CYCLE[(i + 1) % ROT_CYCLE.length];
-    try { localStorage.setItem(ROT_KEY, String(state.rotation)); } catch(e){}
-    updateDebug();
-  };
 
   function startDrawLoop(){
     stopDrawLoop();
@@ -635,15 +593,16 @@ Deja que la IA haga lo otro.`}
         video:{ facingMode:"user", width:{ideal:1080}, height:{ideal:1920}, aspectRatio:{ideal:9/16} },
         audio:true
       });
+      // Best effort: ask the camera for a real portrait feed. If the device honors it,
+      // the frame comes in vertical and there is no side-crop at all.
+      try {
+        var vt = stream.getVideoTracks()[0];
+        if(vt && vt.applyConstraints){ await vt.applyConstraints({ width:{ideal:1080}, height:{ideal:1920}, aspectRatio:{ideal:9/16} }); }
+      } catch(_e){}
       camPreview.srcObject = stream;
       var onMeta = function(){
-        // First use only: default horizontal cameras to rotate-90 (fill vertical), vertical to fit.
-        // After that, respect whatever the user picked with the Girar button (saved).
-        if(localStorage.getItem(ROT_KEY) === null){
-          state.rotation = (camPreview.videoWidth > camPreview.videoHeight) ? 90 : 0;
-        }
         setupRecordCanvas();
-        startDrawLoop();   // live preview IS the recording canvas, so what you see == what records
+        startDrawLoop();   // the live preview IS the recording canvas, so what you see == what records
         updateDebug();
       };
       camPreview.onloadedmetadata = onMeta;
@@ -747,8 +706,8 @@ Deja que la IA haga lo otro.`}
     var mime = pickMime();
     var recordStream = state.stream;
     var usingCanvas = false;
-    // Recording the raw camera stream directly can come out landscape/rotated on iOS Safari;
-    // re-encoding via the canvas gives an upright, correctly-oriented video regardless.
+    // Recording the raw camera stream can come out landscape on iOS Safari; re-encoding
+    // via the 9:16 canvas guarantees an upright, correctly-framed vertical video.
     if(typeof recCanvas.captureStream === "function"){
       try{
         state.canvasStream = recCanvas.captureStream(RECORD_FPS);

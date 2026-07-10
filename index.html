@@ -66,18 +66,21 @@
   /* ---------- STAGE (filming) ---------- */
   #stage{position:fixed; inset:0; display:none; background:#000;}
   #stage.show{display:block;}
-  #camPreview{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; transform:scaleX(-1);}
-  #camOff{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  /* The <video> is only the frame SOURCE (hidden behind the canvas). What the user
+     actually sees IS the recording canvas, so the preview matches the recording exactly. */
+  #camPreview{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:0;}
+  #recCanvas{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:1;
+    background:#000; transform:scaleX(-1);}
+  #camOff{position:absolute; inset:0; z-index:3; display:flex; align-items:center; justify-content:center;
     color:var(--cream-dim); font-family:var(--mono); font-size:12px; text-align:center; padding:40px;}
-  #recCanvas{position:absolute; left:0; top:0; width:1px; height:1px; opacity:0; pointer-events:none;}
   #dbg{position:absolute; left:0; right:0; top:calc(52px + env(safe-area-inset-top)); text-align:center;
     font-family:var(--mono); font-size:10px; letter-spacing:0.02em; color:var(--cobre-bright); opacity:0.85;
     z-index:6; pointer-events:none; text-shadow:0 1px 3px rgba(0,0,0,.9);}
 
-  #guide{position:absolute; left:0; right:0; top:38%; height:2px; background:linear-gradient(90deg,transparent,var(--cobre) 20%,var(--cobre) 80%,transparent);
+  #guide{position:absolute; left:0; right:0; top:38%; height:2px; z-index:2; background:linear-gradient(90deg,transparent,var(--cobre) 20%,var(--cobre) 80%,transparent);
     opacity:0.55; pointer-events:none;}
 
-  #promptWrap{position:absolute; inset:0; overflow:hidden; pointer-events:none;
+  #promptWrap{position:absolute; inset:0; overflow:hidden; pointer-events:none; z-index:2;
     -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 14%,#000 86%,transparent 100%);
     mask-image:linear-gradient(180deg,transparent 0,#000 14%,#000 86%,transparent 100%);}
   #promptText{position:absolute; left:0; right:0; top:100%; padding:0 26px; text-align:center;
@@ -161,6 +164,7 @@
 
     <div class="hud">
       <button class="hud-btn" id="backBtn">&larr; Volver</button>
+      <button class="hud-btn" id="rotateBtn">&#8635; Girar</button>
       <div class="hud-btn"><span class="rec-dot" id="recDot"></span><span id="timer">00:00</span></div>
     </div>
 
@@ -479,18 +483,22 @@ Deja que la IA haga lo otro.`}
 
   var RECORD_FPS = 30;
 
+  var ROT_KEY = "bitacoria_tp_rot_v1";
+  // Rotation applied to the recorded frame: 0 = fit (letterbox), 90 / 270 = rotate to fill 9:16.
+  state.rotation = 0;
+  try { var _r = parseInt(localStorage.getItem(ROT_KEY), 10); if(_r===0 || _r===90 || _r===270) state.rotation = _r; } catch(e){}
+
   var dbgEl = document.getElementById("dbg");
+  function rotLabel(){ return state.rotation === 0 ? "ajuste (barras)" : "girado " + state.rotation + "°"; }
   function updateDebug(){
     if(!dbgEl) return;
     var vw = camPreview.videoWidth || 0, vh = camPreview.videoHeight || 0;
     var orient = vw && vh ? (vh >= vw ? "vertical" : "HORIZONTAL") : "-";
-    dbgEl.textContent = "cam " + vw + "x" + vh + " (" + orient + ")  ->  video " + recCanvas.width + "x" + recCanvas.height;
+    dbgEl.textContent = "cam " + vw + "x" + vh + " (" + orient + ")  |  " + rotLabel();
   }
 
-  // Sizes the recording canvas so the WHOLE camera frame fits with no cropping.
-  // A vertical camera -> canvas matches its aspect exactly (fills, no bars).
-  // A horizontal camera -> a 9:16 vertical canvas, and the frame is letterboxed
-  // (bars top/bottom) instead of being zoom-cropped. Either way: no zoom.
+  // Sizes the recording canvas. Horizontal cameras -> a 1080x1920 vertical frame
+  // (the wide frame is rotated to fill it). Vertical cameras -> match their aspect.
   function setupRecordCanvas(){
     var vw = camPreview.videoWidth || 1080;
     var vh = camPreview.videoHeight || 1920;
@@ -509,19 +517,41 @@ Deja que la IA haga lo otro.`}
     updateDebug();
   }
 
-  // Draws the current camera frame FIT (contain) inside the canvas: full frame,
-  // centered, correct aspect ratio, no zoom. Any empty area is filled black.
+  // Draws the current camera frame into the canvas.
+  //  rotation 0      -> fit the whole frame (contain); letterboxed if aspects differ.
+  //  rotation 90/270 -> rotate the frame and COVER the canvas: fills 9:16 with no bars and no zoom
+  //                     (a 1920x1080 frame rotated is exactly 1080x1920).
   function drawFrame(){
     var vw = camPreview.videoWidth, vh = camPreview.videoHeight;
     if(!vw || !vh) return;
     var cw = recCanvas.width, ch = recCanvas.height;
-    var scale = Math.min(cw/vw, ch/vh);
-    var dw = vw*scale, dh = vh*scale;
-    var dx = (cw-dw)/2, dy = (ch-dh)/2;
+    recCtx.save();
     recCtx.fillStyle = "#000";
     recCtx.fillRect(0, 0, cw, ch);
-    recCtx.drawImage(camPreview, 0, 0, vw, vh, dx, dy, dw, dh);
+    var rot = state.rotation || 0;
+    if(rot === 90 || rot === 270){
+      recCtx.translate(cw/2, ch/2);
+      recCtx.rotate(rot * Math.PI / 180);
+      // Axes swap after rotation: cover a (ch x cw) box with the frame.
+      var scale = Math.max(ch/vw, cw/vh);
+      var dw = vw*scale, dh = vh*scale;
+      recCtx.drawImage(camPreview, -dw/2, -dh/2, dw, dh);
+    } else {
+      var scale2 = Math.min(cw/vw, ch/vh);
+      var dw2 = vw*scale2, dh2 = vh*scale2;
+      recCtx.drawImage(camPreview, 0, 0, vw, vh, (cw-dw2)/2, (ch-dh2)/2, dw2, dh2);
+    }
+    recCtx.restore();
   }
+
+  var rotateBtn = document.getElementById("rotateBtn");
+  var ROT_CYCLE = [90, 270, 0];
+  rotateBtn.onclick = function(){
+    var i = ROT_CYCLE.indexOf(state.rotation);
+    state.rotation = ROT_CYCLE[(i + 1) % ROT_CYCLE.length];
+    try { localStorage.setItem(ROT_KEY, String(state.rotation)); } catch(e){}
+    updateDebug();
+  };
 
   function startDrawLoop(){
     stopDrawLoop();
@@ -587,7 +617,7 @@ Deja que la IA haga lo otro.`}
     camPreview.style.display = "none";
     camOff.innerHTML = html;
     var retry = document.getElementById("camRetryBtn");
-    if(retry) retry.onclick = function(){ openCamera(); };
+    if(retry) retry.onclick = async function(){ state.stream = await openCamera(); };
     var skip = document.getElementById("camSkipBtn");
     if(skip) skip.onclick = function(){ state.camOn = false; camToggle.classList.remove("on"); showCamFallback(
       'Cámara desactivada.<br>Usa tu app de Cámara junto a esta pantalla.'
@@ -606,7 +636,18 @@ Deja que la IA haga lo otro.`}
         audio:true
       });
       camPreview.srcObject = stream;
-      camPreview.onloadedmetadata = updateDebug;
+      var onMeta = function(){
+        // First use only: default horizontal cameras to rotate-90 (fill vertical), vertical to fit.
+        // After that, respect whatever the user picked with the Girar button (saved).
+        if(localStorage.getItem(ROT_KEY) === null){
+          state.rotation = (camPreview.videoWidth > camPreview.videoHeight) ? 90 : 0;
+        }
+        setupRecordCanvas();
+        startDrawLoop();   // live preview IS the recording canvas, so what you see == what records
+        updateDebug();
+      };
+      camPreview.onloadedmetadata = onMeta;
+      if(camPreview.videoWidth) onMeta();
       camOff.style.display="none"; camPreview.style.display="block";
       updateDebug();
       return stream;
@@ -706,11 +747,10 @@ Deja que la IA haga lo otro.`}
     var mime = pickMime();
     var recordStream = state.stream;
     var usingCanvas = false;
-    // Recording the raw camera stream directly can come out rotated/non-portrait on iOS Safari;
-    // re-encoding via canvas guarantees upright output that fits the frame, with no zoom crop.
+    // Recording the raw camera stream directly can come out landscape/rotated on iOS Safari;
+    // re-encoding via the canvas gives an upright, correctly-oriented video regardless.
     if(typeof recCanvas.captureStream === "function"){
       try{
-        setupRecordCanvas();
         state.canvasStream = recCanvas.captureStream(RECORD_FPS);
         recordStream = new MediaStream(
           state.canvasStream.getVideoTracks().concat(state.stream.getAudioTracks())
@@ -734,7 +774,6 @@ Deja que la IA haga lo otro.`}
     state.recorder.onstop = function(){ handleStop(mime); };
     countdownThen(function(){
       state.starting = false;
-      if(usingCanvas){ drawFrame(); startDrawLoop(); }
       state.recorder.start();
       state.recording = true;
       recBtn.classList.add("recording");
@@ -753,12 +792,11 @@ Deja que la IA haga lo otro.`}
     recDot.classList.remove("blink");
     stopTimer();
     stopScroll();
-    stopDrawLoop();
     if(state.recorder && state.recorder.state!=="inactive"){
       var recorder = state.recorder;
       var origOnStop = recorder.onstop;
       recorder.onstop = function(){
-        if(origOnStop) origOnStop();
+        if(!silent && origOnStop) origOnStop();   // silent = backing out: don't show the save sheet
         stopCanvasStream();
         if(done) done();
       };

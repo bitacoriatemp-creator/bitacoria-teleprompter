@@ -1,0 +1,710 @@
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>BitacorIA Teleprompter</title>
+<style>
+  :root{
+    --bg:#121011; --panel:#1c1815; --panel-2:#241f1b;
+    --cream:#F5F0E8; --cream-dim:#c9c2b6;
+    --cobre:#a6784b; --cobre-bright:#c9a67d; --brown:#5C3A21;
+    --rec:#b5384f; --line:#3a322b;
+    --mono: ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--cream);
+    font-family:var(--sans); overscroll-behavior:none; overflow:hidden;}
+  #app{position:fixed; inset:0; display:flex; flex-direction:column;}
+
+  /* ---------- SETUP SCREEN ---------- */
+  #setup{flex:1; overflow-y:auto; padding:max(20px,env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));}
+  .brand{display:flex; align-items:baseline; gap:10px; margin-bottom:4px;}
+  .brand .mark{width:10px;height:10px;border-radius:2px;background:var(--cobre);
+    box-shadow:0 0 10px var(--cobre);}
+  .brand h1{font-size:15px; letter-spacing:0.14em; text-transform:uppercase; color:var(--cobre-bright);
+    font-weight:700; margin:0;}
+  .sub{color:var(--cream-dim); font-size:13px; margin:0 0 22px; line-height:1.5;}
+
+  .label{font-family:var(--mono); font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase;
+    color:var(--cobre-bright); margin:0 0 10px;}
+
+  .scripts{display:grid; grid-template-columns:1fr; gap:8px; margin-bottom:26px;}
+  .script-card{background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:13px 14px; text-align:left; color:var(--cream); font-family:var(--sans);
+    display:flex; flex-direction:column; gap:2px; cursor:pointer;}
+  .script-card .t{font-size:14.5px; font-weight:600; line-height:1.3;}
+  .script-card .k{font-family:var(--mono); font-size:10px; color:var(--cream-dim); letter-spacing:0.02em;}
+  .script-card.active{border-color:var(--cobre); background:linear-gradient(135deg,var(--brown),var(--panel-2));
+    box-shadow:0 0 0 1px var(--cobre) inset;}
+  .script-card.done{opacity:0.55;}
+  .script-card.done .t{color:var(--cream-dim); text-decoration:line-through; text-decoration-color:var(--cobre);}
+
+  textarea#customText{width:100%; min-height:120px; background:var(--panel); color:var(--cream);
+    border:1px solid var(--line); border-radius:10px; padding:12px 13px; font-family:var(--sans);
+    font-size:15px; line-height:1.5; resize:vertical; display:none;}
+
+  .row{display:flex; align-items:center; justify-content:space-between; gap:14px;
+    padding:14px 2px; border-bottom:1px solid var(--line);}
+  .row:last-of-type{border-bottom:none;}
+  .row .name{font-size:14px; color:var(--cream);}
+  .row .val{font-family:var(--mono); font-size:12px; color:var(--cobre-bright); min-width:44px; text-align:right;}
+  input[type=range]{-webkit-appearance:none; flex:1; height:4px; border-radius:2px; background:var(--line); outline:none;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none; width:20px; height:20px; border-radius:50%;
+    background:var(--cobre-bright); border:2px solid var(--bg); box-shadow:0 0 0 1px var(--cobre);}
+
+  .toggle{width:46px; height:27px; border-radius:14px; background:var(--line); position:relative; flex:none;
+    border:none; padding:0;}
+  .toggle::after{content:""; position:absolute; top:2.5px; left:2.5px; width:22px; height:22px; border-radius:50%;
+    background:var(--cream); transition:transform .18s cubic-bezier(.23,1,.32,1);}
+  .toggle.on{background:var(--cobre);}
+  .toggle.on::after{transform:translateX(19px);}
+
+  .go{width:100%; margin-top:22px; padding:16px; border:none; border-radius:12px;
+    background:linear-gradient(135deg,var(--cobre-bright),var(--cobre)); color:#1a1310;
+    font-family:var(--sans); font-weight:700; font-size:16px; letter-spacing:0.01em;}
+  .go:active{transform:scale(0.98);}
+  .hint{font-size:11.5px; color:var(--cream-dim); text-align:center; margin-top:10px; line-height:1.5;}
+
+  /* ---------- STAGE (filming) ---------- */
+  #stage{position:fixed; inset:0; display:none; background:#000;}
+  #stage.show{display:block;}
+  #camPreview{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1);}
+  #camOff{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--cream-dim); font-family:var(--mono); font-size:12px; text-align:center; padding:40px;}
+
+  #guide{position:absolute; left:0; right:0; top:38%; height:2px; background:linear-gradient(90deg,transparent,var(--cobre) 20%,var(--cobre) 80%,transparent);
+    opacity:0.55; pointer-events:none;}
+
+  #promptWrap{position:absolute; inset:0; overflow:hidden; pointer-events:none;
+    -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 14%,#000 86%,transparent 100%);
+    mask-image:linear-gradient(180deg,transparent 0,#000 14%,#000 86%,transparent 100%);}
+  #promptText{position:absolute; left:0; right:0; top:100%; padding:0 26px; text-align:center;
+    font-family:var(--sans); font-weight:600; color:var(--cream); white-space:pre-wrap;
+    text-shadow:0 2px 10px rgba(0,0,0,.85), 0 0 26px rgba(0,0,0,.6); line-height:1.5;}
+  #promptText.mirrored{transform:scaleX(-1);}
+
+  .hud{position:absolute; left:0; right:0; top:0; display:flex; align-items:center; justify-content:space-between;
+    padding:calc(12px + env(safe-area-inset-top)) 16px 8px; z-index:5;}
+  .hud-btn{background:rgba(0,0,0,.45); backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,.15);
+    color:var(--cream); border-radius:20px; padding:8px 13px; font-family:var(--mono); font-size:12px;
+    display:flex; align-items:center; gap:7px;}
+  .rec-dot{width:8px;height:8px;border-radius:50%; background:var(--rec);}
+  .rec-dot.blink{animation:blink 1s step-start infinite;}
+  @keyframes blink{50%{opacity:.25;}}
+
+  .transport{position:absolute; left:0; right:0; bottom:calc(20px + env(safe-area-inset-bottom));
+    display:flex; align-items:center; justify-content:center; gap:26px; z-index:5;}
+  .tbtn{width:52px; height:52px; border-radius:50%; border:1px solid rgba(255,255,255,.18);
+    background:rgba(0,0,0,.45); backdrop-filter:blur(6px); color:var(--cream); font-size:20px;
+    display:flex; align-items:center; justify-content:center;}
+  .tbtn.big{width:74px; height:74px; background:var(--cream); color:#1a1310; border:none;}
+  .tbtn.big.recording{background:var(--rec); color:var(--cream);}
+  .tbtn.big.recording::after{content:""; width:24px; height:24px; border-radius:6px; background:var(--cream);}
+  .tbtn:active{transform:scale(0.94);}
+
+  #countdown{position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    font-family:var(--sans); font-weight:800; font-size:120px; color:var(--cream); z-index:10;
+    text-shadow:0 4px 30px rgba(0,0,0,.7);}
+
+  /* ---------- SAVE SHEET ---------- */
+  #saveWrap{position:fixed; inset:0; background:rgba(10,8,7,.92); backdrop-filter:blur(8px);
+    display:none; align-items:flex-end; z-index:20;}
+  #saveWrap.show{display:flex;}
+  #saveCard{width:100%; background:var(--panel); border-radius:20px 20px 0 0; padding:22px 20px calc(26px + env(safe-area-inset-bottom));
+    display:flex; flex-direction:column; gap:12px;}
+  #saveCard h2{margin:0; font-size:17px; font-weight:700;}
+  #saveCard p{margin:0; font-size:13px; color:var(--cream-dim); line-height:1.55;}
+  video#playback{width:100%; border-radius:12px; background:#000; max-height:36vh;}
+  .btnrow{display:flex; gap:10px;}
+  .save-btn{flex:1; padding:14px; border:none; border-radius:12px; font-family:var(--sans); font-weight:700; font-size:15px;}
+  .save-btn.primary{background:linear-gradient(135deg,var(--cobre-bright),var(--cobre)); color:#1a1310;}
+  .save-btn.secondary{background:var(--panel-2); color:var(--cream); border:1px solid var(--line);}
+</style>
+
+<div id="app">
+  <div id="setup">
+    <div class="brand"><span class="mark"></span><h1>BitacorIA &middot; Teleprompter</h1></div>
+    <p class="sub">Elige un guion, ajusta velocidad y tamaño, y graba directo con tu cámara. Al terminar, se guarda en tu galería.</p>
+
+    <div class="label">Guion</div>
+    <div class="scripts" id="scriptList"></div>
+    <textarea id="customText" placeholder="Pega o escribe tu propio guion aquí..."></textarea>
+
+    <div class="label" style="margin-top:4px">Ajustes</div>
+    <div class="row">
+      <div class="name">Velocidad de lectura</div>
+      <input type="range" id="speed" min="1" max="10" value="5" step="1">
+      <div class="val" id="speedVal">5</div>
+    </div>
+    <div class="row">
+      <div class="name">Tamaño de texto</div>
+      <input type="range" id="fsize" min="20" max="52" value="34" step="2">
+      <div class="val" id="fsizeVal">34</div>
+    </div>
+    <div class="row">
+      <div class="name">Espejo (rig con vidrio)</div>
+      <button class="toggle" id="mirrorToggle"></button>
+    </div>
+    <div class="row">
+      <div class="name">Fondo: mi cámara</div>
+      <button class="toggle on" id="camToggle"></button>
+    </div>
+
+    <button class="go" id="startBtn">Empezar &rarr;</button>
+    <div class="hint" id="setupHint">La primera vez, tu iPhone pedirá permiso de cámara y micrófono.</div>
+  </div>
+
+  <div id="stage">
+    <video id="camPreview" autoplay playsinline muted></video>
+    <div id="camOff">Cámara desactivada.<br>Usa tu app de Cámara junto a esta pantalla.</div>
+    <div id="guide"></div>
+    <div id="promptWrap"><div id="promptText"></div></div>
+
+    <div class="hud">
+      <button class="hud-btn" id="backBtn">&larr; Volver</button>
+      <div class="hud-btn"><span class="rec-dot" id="recDot"></span><span id="timer">00:00</span></div>
+    </div>
+
+    <div class="transport">
+      <button class="tbtn" id="restartBtn">&#8635;</button>
+      <button class="tbtn big" id="recBtn"></button>
+      <button class="tbtn" id="pauseBtn">&#10074;&#10074;</button>
+    </div>
+
+    <div id="countdown">3</div>
+  </div>
+
+  <div id="saveWrap">
+    <div id="saveCard">
+      <h2>Tu video está listo</h2>
+      <video id="playback" controls playsinline></video>
+      <p id="saveNote">Toca "Guardar en Fotos" y elige Guardar Video en el menú que aparece.</p>
+      <div class="btnrow">
+        <button class="save-btn secondary" id="discardBtn">Descartar</button>
+        <button class="save-btn primary" id="saveBtn">Guardar en Fotos</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var SCRIPTS = [
+    {k:"ing1999", t:"Ing. 1999 vs Ing. 2026", body:
+`Estamos en 2026 y sigues trabajando como ingeniero de 1999. Te lo demuestro en 50 segundos.
+
+El Ing. 1999 llena su bitácora en una libreta... y en la noche, en su casa, la pasa a Word. Letra por letra.
+
+¿Te suena? Sí... tú.
+
+El Ing. 2026 toma UNA foto en obra. La IA le redacta la actividad del día sola. Y ya se fue a descansar.
+
+El Ing. 1999 paga un software carísimo para su cronograma, lo actualiza a mano... y al final nadie lo abre.
+
+Ese cronograma lleva tres semanas sin moverse. Acéptalo.
+
+El Ing. 2026, con la misma foto, ya tiene sus atrasos calculados. Sin mover una sola barra.
+
+El Ing. 1999 arma sus catálogos de conceptos uno por uno... copiando precios de un PDF de hace dos años.
+
+Y luego se pregunta por qué la obra no le deja.
+
+El Ing. 2026 solo le dice qué va a construir. La IA le busca los mejores precios de su zona, le hace una auditoría... y le avisa si se está abaratando o pasando de lanza.
+
+Ok... ¿y con qué haces todo eso?
+
+Con una sola... BitacorIA.
+
+La pregunta no es si vas a cambiar... es en qué año trabajas tú.
+
+¿1999 o 2026? Comenta tu año, sígueme, y métete a la lista de espera.`},
+
+    {k:"top5", t:"Los 5 software que enterraron al Excel", body:
+`Si todavía llevas tu obra en Excel, este video te va a doler.
+
+El Excel te sirvió veinte años. En 2026 ya te está costando dinero. Estos cinco son los que la industria usa de verdad, del más básico al que cambió el juego.
+
+Número cinco: monday punto com. Para el que apenas suelta el Excel. Tableros visuales, bonito y fácil. Pero no nació para construcción.
+
+Número cuatro: Contractor Foreman. Todo en uno, barato, para PyME. Estimación, programación, costos. Sin cobro por obra.
+
+Número tres: Buildertrend. Gestión gringa, potente, pensada para contratistas. Pesada, pero completa.
+
+Número dos: Procore. El estándar corporativo. Si trabajas con los grandes, lo vas a ver. Su precio, también es corporativo.
+
+Y el número uno: Autodesk Forma. En 2026 se tragó a Construction Cloud. Diseño y obra en una sola nube. Lleva cuatro trimestres como el mejor calificado de G2.
+
+¿Notaste algo? Todos son gringos, en inglés, y carísimos.
+
+¿Y para LATAM, en español, con IA que te escribe la bitácora sola desde una foto? Esa ya es otra liga.
+
+Sígueme para la parte dos, y comenta OBRA.`},
+
+    {k:"residente", t:"El residente NO va a desaparecer", body:
+`La IA va a reemplazar al residente. Mentira. Te digo la verdad incómoda.
+
+Te vendieron que en cinco años el residente desaparece. Es mentira, y la data lo prueba.
+
+En Estados Unidos faltan trescientos cuarenta y nueve mil trabajadores de obra solo este año, y ocho de cada diez constructoras no encuentran gente.
+
+No sobra mano de obra. Falta.
+
+Entonces, ¿de dónde sale el miedo? De los jefes que ya quieren automatizar tareas. ¿Cuáles? Las que haces a mano.
+
+El residente no desaparece. El residente-secretaria, sí. El que pasa dos horas en la noche escribiendo lo que ya hizo en el día... ese puesto se acaba.
+
+El residente del futuro dicta, la IA redacta, y él decide. Más obra, menos papeleo.
+
+La pregunta no es si la IA llega. Es de qué lado vas a estar tú.
+
+Comenta, y sígueme.`},
+
+    {k:"catalogo4min", t:"Catálogo en 4 minutos", body:
+`Esto normalmente te lleva toda una tarde. Míralo.
+
+Reto: catálogo completo antes de que acabe el video.
+
+Cuatro minutos, doce segundos. ¿Cuánto te toma a ti?`},
+
+    {k:"trabeIA", t:"Le pedí a una IA que calculara una trabe", body:
+`¿Le confiarías a una IA el cálculo de una trabe? Yo lo probé.
+
+Esto habría sido brujería hace tres años.
+
+La IA propone sección y acero, y verifica contra el reglamento.
+
+Pero ojo: la IA propone, el ingeniero firma. Esto no sustituye tu criterio ni el reglamento.
+
+Lo que sí: te quita las dos horas de iteración.`},
+
+    {k:"primerdia", t:"Mi primer día en obra", body:
+`Mi primer día en obra me gritaron por algo que hoy resuelve un botón.
+
+La lección que aprendí en obra, y que se volvió una empresa.
+
+Por eso existe BitacorIA. Para que ningún residente repita mi primer día.`},
+
+    {k:"autodesk", t:"Autodesk cambió las reglas", body:
+`Mientras peleabas con un presupuesto, la industria cambió. Te pongo al día en treinta segundos.
+
+Autodesk fusionó Construction Cloud dentro de Forma. Diseño y obra, una sola nube.
+
+Y la palabra que va a dominar la construcción en 2026: IA agéntica. Varias inteligencias artificiales trabajando solas, de diseño a obra.
+
+Traducción para tu obra: lo que hoy haces en apps separadas, pronto lo hace un solo sistema que piensa.
+
+BitacorIA va justo en esa ola. Pero en español, y para LATAM.`},
+
+    {k:"cincoIA", t:"5 IA que deberías usar en construcción", body:
+`Si eres arquitecto, ingeniero, o tienes una constructora, y no estás usando IA... este video te interesa.
+
+El mundo entero ya usa IA. Te voy a dar las mejores opciones, por tarea, para que empieces hoy. Guárdalo.
+
+Renders: ChatGPT o Midjourney para conceptual rápido. Veras o Rendair si quieres fotorrealismo desde tu CAD.
+
+Cálculos: Claude te ayuda a plantear y revisar tu memoria de cálculo. Tú verificas y firmas.
+
+Cuantificación: Togal punto AI saca tu takeoff con noventa y ocho por ciento de precisión, cinco veces más rápido que a mano.
+
+Cronograma: ALICE simula miles de programas y te recorta hasta diecisiete por ciento el tiempo de obra.
+
+Y para lo que más te roba, la bitácora, los reportes, y el calendario: BitacorIA. Tomas una foto en obra, y la IA te escribe el reporte y te actualiza el cronograma solo. En español, hecho para LATAM.
+
+Empieza con una: la que más dolor te quite hoy. Sígueme, comenta cuál quieres primero.`}
+  ];
+
+  var BACKLOG = [
+    {k:"bimNo3d", t:"BIM no es 3D", body:
+`Si crees que BIM es hacer un modelo tres D bonito, este video te va a incomodar.
+
+BIM significa Building Information Modeling. La palabra clave no es Building. Es Information.
+
+Un modelo tres D que gira bonito, sin cantidades, sin especificaciones, sin costo detrás... es una animación cara. Nada más.
+
+El valor real de BIM es el dato: cuánto concreto lleva, cuánto cuesta, cuándo se instala.
+
+BitacorIA trabaja justo con ese dato. Cantidades, presupuesto, cronograma. Sin necesitar primero un modelo tres D completo.
+
+BIM no es la forma. Es la información detrás de la forma.`},
+
+    {k:"costoError", t:"Cuánto cuesta un error de bitácora", body:
+`Una línea mal escrita en tu bitácora te puede costar más que tu sueldo de la semana.
+
+Pasa una incidencia en obra. No la documentas a tiempo. Un mes después hay una disputa, y no tienes con qué respaldarte.
+
+Ahí pierdes el argumento. Y pagas de más, o te retrasan el pago a ti.
+
+La bitácora no es un trámite. Es tu respaldo legal y financiero.
+
+BitacorIA hace que cada bitácora quede completa el mismo día, sin que dependa de que te acuerdes en la noche.`},
+
+    {k:"diaConBitacoria", t:"Un día con BitacorIA", body:
+`Así se ve un día de residente cuando dejas de perseguir papeleo.
+
+Llega a obra. Toma una foto, dicta lo que pasó. Tres veces en el día: avance, una incidencia, el cierre.
+
+En la noche, todo ya está armado. Bitácora, avance de cronograma, y una alerta de un concepto que se está por pasar de presupuesto.
+
+Termina su día una hora antes. Todos los días.
+
+No es magia. Es dejar que la IA haga lo que a ti te quita tiempo.`},
+
+    {k:"sinIAvsConIA", t:"Obra sin IA vs obra con IA", body:
+`Puse a competir la misma obra. Una semana a mano, una semana con IA.
+
+Catálogo de conceptos: de seis horas... a cinco minutos.
+
+Bitácora y reporte diario: de una hora... a treinta segundos.
+
+Cronograma de obra: de cinco horas... a menos de un minuto.
+
+No es que la IA trabaje más rápido que tú. Es que tú ya no tienes que hacer ese trabajo.
+
+Sígueme si quieres ver cómo.`},
+
+    {k:"iaQuitaTrabajo", t:"¿La IA me va a quitar el trabajo?", body:
+`Esta es la pregunta que más me hacen. Te la contesto sin rodeos.
+
+La IA no reemplaza tu criterio. No reemplaza tu firma. Eso siempre es tuyo, y siempre lo será.
+
+Lo que sí reemplaza es la parte mecánica: transcribir, copiar precios, mover barras de Gantt a mano.
+
+El puesto que desaparece es el de captura de datos. No el de ingeniero.
+
+Tu trabajo nunca fue escribir bitácoras. Es tomar buenas decisiones en obra.
+
+Deja que la IA haga lo otro.`}
+  ];
+
+  var DONE_KEY = "bitacoria_tp_done_v1";
+  var doneKeys = [];
+  try { doneKeys = JSON.parse(localStorage.getItem(DONE_KEY) || "[]"); } catch(e){ doneKeys = []; }
+
+  function markDone(key){
+    if(doneKeys.indexOf(key) === -1){
+      doneKeys.push(key);
+      try { localStorage.setItem(DONE_KEY, JSON.stringify(doneKeys)); } catch(e){}
+    }
+    if(BACKLOG.length){
+      SCRIPTS.push(BACKLOG.shift());
+    }
+    renderScriptList();
+  }
+
+  var state = {
+    scriptIdx: 0,
+    custom: false,
+    speed: 5,
+    fsize: 34,
+    mirror: false,
+    camOn: true,
+    stream: null,
+    recorder: null,
+    chunks: [],
+    recording: false,
+    scrollY: 0,
+    rafId: null,
+    lastT: null,
+    timerStart: 0,
+    timerId: null
+  };
+
+  var scriptList = document.getElementById("scriptList");
+  var customText = document.getElementById("customText");
+
+  function makeScriptCard(s, i, done){
+    var card = document.createElement("button");
+    card.className = "script-card" + (done ? " done" : "") + (!done && !state.custom && state.scriptIdx===i ? " active" : "");
+    var wc = s.body.trim().split(/\s+/).length;
+    var check = done ? '&#10003; ' : '';
+    card.innerHTML = '<span class="t">'+check+s.t+'</span><span class="k">'+wc+' palabras &middot; ~'+Math.max(20,Math.round(wc/2.6))+'s'+(done?' &middot; grabado':'')+'</span>';
+    card.onclick = function(){ state.custom=false; state.scriptIdx=i; customText.style.display="none"; renderScriptList(); };
+    return card;
+  }
+
+  function renderScriptList(){
+    scriptList.innerHTML = "";
+    var pending = [], done = [];
+    SCRIPTS.forEach(function(s,i){ (doneKeys.indexOf(s.k)>-1 ? done : pending).push(i); });
+
+    pending.forEach(function(i){ scriptList.appendChild(makeScriptCard(SCRIPTS[i], i, false)); });
+
+    var customCard = document.createElement("button");
+    customCard.className = "script-card" + (state.custom ? " active" : "");
+    customCard.innerHTML = '<span class="t">Personalizado</span><span class="k">escribe o pega tu propio texto</span>';
+    customCard.onclick = function(){ state.custom=true; customText.style.display="block"; customText.focus(); renderScriptList(); };
+    scriptList.appendChild(customCard);
+
+    if(done.length){
+      var doneLabel = document.createElement("div");
+      doneLabel.className = "label";
+      doneLabel.style.marginTop = "16px";
+      doneLabel.textContent = "Completados (" + done.length + ")";
+      scriptList.appendChild(doneLabel);
+      done.forEach(function(i){ scriptList.appendChild(makeScriptCard(SCRIPTS[i], i, true)); });
+    }
+  }
+  renderScriptList();
+
+  function currentBody(){
+    return state.custom ? (customText.value || "Escribe tu guion arriba...") : SCRIPTS[state.scriptIdx].body;
+  }
+
+  var speedInput = document.getElementById("speed"), speedVal = document.getElementById("speedVal");
+  var fsizeInput = document.getElementById("fsize"), fsizeVal = document.getElementById("fsizeVal");
+  speedInput.oninput = function(){ state.speed = +speedInput.value; speedVal.textContent = state.speed; };
+  fsizeInput.oninput = function(){ state.fsize = +fsizeInput.value; fsizeVal.textContent = state.fsize; document.getElementById("promptText").style.fontSize = state.fsize+"px"; };
+
+  var mirrorToggle = document.getElementById("mirrorToggle");
+  mirrorToggle.onclick = function(){ state.mirror = !state.mirror; mirrorToggle.classList.toggle("on", state.mirror);
+    document.getElementById("promptText").classList.toggle("mirrored", state.mirror); };
+
+  var camToggle = document.getElementById("camToggle");
+  camToggle.onclick = function(){ state.camOn = !state.camOn; camToggle.classList.toggle("on", state.camOn); };
+
+  var stage = document.getElementById("stage");
+  var setup = document.getElementById("setup");
+  var camPreview = document.getElementById("camPreview");
+  var camOff = document.getElementById("camOff");
+  var promptText = document.getElementById("promptText");
+  var promptWrap = document.getElementById("promptWrap");
+  var countdownEl = document.getElementById("countdown");
+  var recDot = document.getElementById("recDot");
+  var timerEl = document.getElementById("timer");
+  var recBtn = document.getElementById("recBtn");
+  var pauseBtn = document.getElementById("pauseBtn");
+
+  var supportsRecord = !!(navigator.mediaDevices && window.MediaRecorder);
+  if(!supportsRecord){
+    document.getElementById("setupHint").textContent = "Este navegador no soporta grabar aquí — usa la app de Cámara junto a esta pantalla mientras lees.";
+  }
+
+  function fmtTime(ms){
+    var s = Math.floor(ms/1000);
+    var m = Math.floor(s/60); s = s%60;
+    return (m<10?"0":"")+m+":"+(s<10?"0":"")+s;
+  }
+
+  function startScroll(){
+    state.scrollY = 0;
+    promptText.style.top = "100%";
+    state.lastT = null;
+    var pxPerSec = 18 + state.speed*13; // 31..148 px/s
+    function step(t){
+      if(state.lastT==null) state.lastT = t;
+      var dt = (t - state.lastT)/1000;
+      state.lastT = t;
+      if(!state.paused){
+        state.scrollY += pxPerSec*dt;
+        promptText.style.transform = "translateY(-"+state.scrollY+"px)";
+      }
+      state.rafId = requestAnimationFrame(step);
+    }
+    state.rafId = requestAnimationFrame(step);
+  }
+  function stopScroll(){
+    if(state.rafId) cancelAnimationFrame(state.rafId);
+    state.rafId = null;
+  }
+
+  state.camAttempts = 0;
+
+  function showCamFallback(html){
+    camOff.style.display = "flex"; camOff.style.flexDirection = "column"; camOff.style.gap = "14px";
+    camPreview.style.display = "none";
+    camOff.innerHTML = html;
+    var retry = document.getElementById("camRetryBtn");
+    if(retry) retry.onclick = function(){ openCamera(); };
+    var skip = document.getElementById("camSkipBtn");
+    if(skip) skip.onclick = function(){ state.camOn = false; camToggle.classList.remove("on"); showCamFallback(
+      'Cámara desactivada.<br>Usa tu app de Cámara junto a esta pantalla.'
+    ); };
+  }
+
+  async function openCamera(){
+    if(!state.camOn || !navigator.mediaDevices){
+      showCamFallback('Cámara desactivada.<br>Usa tu app de Cámara junto a esta pantalla.');
+      return null;
+    }
+    state.camAttempts++;
+    try{
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:"user", width:{ideal:1080}, height:{ideal:1920} },
+        audio:true
+      });
+      camPreview.srcObject = stream;
+      camOff.style.display="none"; camPreview.style.display="block";
+      return stream;
+    }catch(e){
+      var btns = '<button class="save-btn primary" id="camRetryBtn" style="max-width:220px">Reintentar</button>'+
+                 '<button class="save-btn secondary" id="camSkipBtn" style="max-width:220px">Seguir sin cámara</button>';
+      if(e.name === "NotAllowedError"){
+        if(state.camAttempts <= 1){
+          showCamFallback(
+            '<strong>No se pudo activar la cámara.</strong><br>'+
+            'Si no viste un aviso pidiendo permiso, tu iPhone ya lo tenía bloqueado de antes.<br><br>'+
+            'Ve a <strong>Ajustes → Safari → Cámara</strong> (y Micrófono) y pon "Permitir", o toca el ícono "aA" en la barra de direcciones → <strong>Configuración del sitio web</strong> → restablece los permisos. Luego regresa aquí.'+
+            '<div class="btnrow" style="margin-top:6px">'+btns+'</div>'
+          );
+        } else {
+          showCamFallback(
+            '<strong>Sigue bloqueada.</strong><br>'+
+            'Este permiso ya quedó denegado para este sitio y tu iPhone no va a volver a preguntar solo.<br><br>'+
+            '1. Cierra esta pestaña.<br>2. Ajustes de iPhone → Safari → Cámara/Micrófono → Permitir (o Preguntar).<br>3. Vuelve a abrir el enlace.<br><br>'+
+            'Mientras tanto puedes seguir usando el teleprompter con tu app de Cámara aparte.'+
+            '<div class="btnrow" style="margin-top:6px">'+btns+'</div>'
+          );
+        }
+      } else {
+        showCamFallback(
+          '<strong>No se pudo acceder a la cámara/micrófono</strong> ('+e.name+').<br>'+
+          'Usa tu app de Cámara junto a esta pantalla mientras tanto.'+
+          '<div class="btnrow" style="margin-top:6px">'+btns+'</div>'
+        );
+      }
+      return null;
+    }
+  }
+
+  function pickMime(){
+    var opts = ["video/mp4;codecs=avc1,mp4a.40.2","video/mp4","video/webm;codecs=vp9,opus","video/webm"];
+    for(var i=0;i<opts.length;i++){ if(window.MediaRecorder && MediaRecorder.isTypeSupported(opts[i])) return opts[i]; }
+    return "";
+  }
+
+  function countdownThen(cb){
+    var n = 3;
+    countdownEl.style.display = "flex";
+    countdownEl.textContent = n;
+    var iv = setInterval(function(){
+      n--;
+      if(n<=0){ clearInterval(iv); countdownEl.style.display="none"; cb(); }
+      else { countdownEl.textContent = n; }
+    },700);
+  }
+
+  document.getElementById("startBtn").onclick = async function(){
+    promptText.textContent = currentBody();
+    promptText.style.fontSize = state.fsize+"px";
+    promptText.classList.toggle("mirrored", state.mirror);
+    setup.style.display = "none";
+    stage.classList.add("show");
+    state.paused = false;
+    state.stream = await openCamera();
+  };
+
+  document.getElementById("backBtn").onclick = function(){
+    stopScroll();
+    if(state.recording) stopRecording(true);
+    if(state.stream){ state.stream.getTracks().forEach(function(tr){tr.stop();}); state.stream=null; }
+    stage.classList.remove("show");
+    setup.style.display = "block";
+  };
+
+  document.getElementById("restartBtn").onclick = function(){
+    stopScroll(); startScroll();
+  };
+
+  pauseBtn.onclick = function(){
+    if(!state.rafId && !state.recording){ startScroll(); pauseBtn.innerHTML="&#10074;&#10074;"; return; }
+    state.paused = !state.paused;
+    pauseBtn.innerHTML = state.paused ? "&#9654;" : "&#10074;&#10074;";
+  };
+
+  function startTimer(){
+    state.timerStart = Date.now();
+    state.timerId = setInterval(function(){ timerEl.textContent = fmtTime(Date.now()-state.timerStart); },250);
+  }
+  function stopTimer(){ if(state.timerId) clearInterval(state.timerId); }
+
+  function startRecording(){
+    if(!state.stream || !supportsRecord){
+      countdownThen(startScroll);
+      return;
+    }
+    var mime = pickMime();
+    try{
+      state.recorder = new MediaRecorder(state.stream, mime ? {mimeType:mime} : undefined);
+    }catch(e){
+      countdownThen(startScroll); return;
+    }
+    state.chunks = [];
+    state.recorder.ondataavailable = function(e){ if(e.data && e.data.size>0) state.chunks.push(e.data); };
+    state.recorder.onstop = function(){ handleStop(mime); };
+    countdownThen(function(){
+      state.recorder.start();
+      state.recording = true;
+      recBtn.classList.add("recording");
+      recDot.classList.add("blink");
+      startScroll();
+      startTimer();
+    });
+  }
+
+  function stopRecording(silent){
+    state.recording = false;
+    recBtn.classList.remove("recording");
+    recDot.classList.remove("blink");
+    stopTimer();
+    stopScroll();
+    if(state.recorder && state.recorder.state!=="inactive"){ state.recorder.stop(); }
+    else if(!silent){ handleStop(""); }
+  }
+
+  recBtn.onclick = function(){
+    if(state.recording){ stopRecording(false); }
+    else { startRecording(); }
+  };
+
+  var saveWrap = document.getElementById("saveWrap");
+  var playback = document.getElementById("playback");
+  var saveBtn = document.getElementById("saveBtn");
+  var saveNote = document.getElementById("saveNote");
+  var lastBlob = null, lastMime = "";
+
+  function handleStop(mime){
+    if(!state.chunks.length) return;
+    if(!state.custom && SCRIPTS[state.scriptIdx]){ markDone(SCRIPTS[state.scriptIdx].k); }
+    lastMime = (mime||"").split(";")[0] || "video/webm";
+    lastBlob = new Blob(state.chunks, {type:lastMime});
+    var url = URL.createObjectURL(lastBlob);
+    playback.src = url;
+    saveWrap.classList.add("show");
+
+    var ext = lastMime.indexOf("mp4")>-1 ? "mp4" : "webm";
+    var canShareFiles = !!(navigator.canShare && window.File);
+    if(canShareFiles){
+      try{
+        var testFile = new File([lastBlob], "bitacoria-"+Date.now()+"."+ext, {type:lastMime});
+        canShareFiles = navigator.canShare({files:[testFile]});
+      }catch(e){ canShareFiles = false; }
+    }
+    saveNote.textContent = canShareFiles
+      ? 'Toca "Guardar en Fotos": se abrirá el menú de Compartir de iOS — elige "Guardar Video".'
+      : 'Tu iPhone no permite compartir archivos desde este navegador. Mantén presionado el video de arriba y elige "Guardar Video".';
+  }
+
+  saveBtn.onclick = async function(){
+    if(!lastBlob) return;
+    var ext = lastMime.indexOf("mp4")>-1 ? "mp4" : "webm";
+    var file = new File([lastBlob], "bitacoria-"+Date.now()+"."+ext, {type:lastMime});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      try{
+        await navigator.share({files:[file], title:"BitacorIA", text:"Grabado con el teleprompter de BitacorIA"});
+        return;
+      }catch(e){ /* usuario cancelo o no soportado, cae al fallback */ }
+    }
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(lastBlob);
+    a.download = "bitacoria-"+Date.now()+"."+ext;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  };
+
+  document.getElementById("discardBtn").onclick = function(){
+    saveWrap.classList.remove("show");
+    playback.pause(); playback.removeAttribute("src"); playback.load();
+    lastBlob = null;
+  };
+
+})();
+</script>

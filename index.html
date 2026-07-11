@@ -66,8 +66,6 @@
   /* ---------- STAGE (filming) ---------- */
   #stage{position:fixed; inset:0; display:none; background:#000;}
   #stage.show{display:block;}
-  /* The <video> is only the frame SOURCE (hidden behind the canvas). What the user
-     actually sees IS the recording canvas, so the preview matches the recording exactly. */
   #camPreview{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:0;}
   #recCanvas{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:1;
     background:#000; transform:scaleX(-1);}
@@ -105,6 +103,12 @@
   .tbtn.big.recording{background:var(--rec); color:var(--cream);}
   .tbtn.big.recording::after{content:""; width:24px; height:24px; border-radius:6px; background:var(--cream);}
   .tbtn:active{transform:scale(0.94);}
+
+  #zoomCtl{position:absolute; left:0; right:0; bottom:calc(104px + env(safe-area-inset-bottom));
+    display:flex; align-items:center; gap:12px; padding:0 30px; z-index:5;}
+  #zoomCtl .zlbl{font-family:var(--mono); font-size:10px; letter-spacing:0.12em; text-transform:uppercase;
+    color:var(--cream); opacity:0.85; text-shadow:0 1px 3px rgba(0,0,0,.9);}
+  #zoomCtl input[type=range]{flex:1; background:rgba(255,255,255,.25);}
 
   #countdown{position:absolute; inset:0; display:none; align-items:center; justify-content:center;
     font-family:var(--sans); font-weight:800; font-size:120px; color:var(--cream); z-index:10;
@@ -165,6 +169,11 @@
     <div class="hud">
       <button class="hud-btn" id="backBtn">&larr; Volver</button>
       <div class="hud-btn"><span class="rec-dot" id="recDot"></span><span id="timer">00:00</span></div>
+    </div>
+
+    <div id="zoomCtl">
+      <span class="zlbl">Zoom</span>
+      <input type="range" id="zoomRange" min="0" max="100" value="0">
     </div>
 
     <div class="transport">
@@ -484,12 +493,24 @@ Deja que la IA haga lo otro.`}
 
   var OUT_W = 1080, OUT_H = 1920;   // fixed 9:16 vertical output (TikTok / Reels)
 
+  // Tiny offscreen canvas for a cheap background blur (works on every iOS Safari, no
+  // ctx.filter needed): draw the frame very small, then upscale it -> soft blur.
+  var bgCanvas = document.createElement("canvas");
+  bgCanvas.width = 54; bgCanvas.height = 96;
+  var bgCtx = bgCanvas.getContext("2d");
+
+  var ZOOM_KEY = "bitacoria_tp_zoom_v1";
+  // 0 = whole frame visible (NO zoom; empty area filled with a blurred background, no black bars).
+  // 1 = frame fills 9:16 (max zoom, sides cropped). The Zoom slider moves between the two.
+  state.zoom = 0;
+  try { var _z = parseFloat(localStorage.getItem(ZOOM_KEY)); if(_z >= 0 && _z <= 1) state.zoom = _z; } catch(e){}
+
   var dbgEl = document.getElementById("dbg");
   function updateDebug(){
     if(!dbgEl) return;
     var vw = camPreview.videoWidth || 0, vh = camPreview.videoHeight || 0;
     var orient = vw && vh ? (vh >= vw ? "vertical" : "horizontal") : "-";
-    dbgEl.textContent = "cam " + vw + "x" + vh + " (" + orient + ")  ->  9:16 " + recCanvas.width + "x" + recCanvas.height;
+    dbgEl.textContent = "cam " + vw + "x" + vh + " (" + orient + ")";
   }
 
   // Fixed 9:16 (1080x1920) vertical output — the TikTok / Reels format.
@@ -499,16 +520,37 @@ Deja que la IA haga lo otro.`}
     updateDebug();
   }
 
-  // Draws the camera frame to COVER the 9:16 canvas: fills it completely, centered
-  // and upright, with NO black bars. A wide (landscape) camera is cropped left/right
-  // to fit vertical — exactly how TikTok/Reels frame video. No rotation, no letterbox.
+  // Draws the camera frame into the 9:16 canvas.
+  //  - Foreground scale runs from "fit" (whole frame, zoom 0) to "cover" (fills, zoom 1).
+  //  - Whatever the foreground doesn't cover is filled with a blurred, zoomed copy of the
+  //    frame (NOT black bars). So at zoom 0 you get the complete frame with a soft blurred
+  //    top/bottom — no crop, no zoom, no bars.
   function drawFrame(){
     var vw = camPreview.videoWidth, vh = camPreview.videoHeight;
     if(!vw || !vh) return;
     var cw = recCanvas.width, ch = recCanvas.height;
-    var scale = Math.max(cw/vw, ch/vh);   // cover: fill the whole frame
+    var fit = Math.min(cw/vw, ch/vh);
+    var cover = Math.max(cw/vw, ch/vh);
+    var scale = fit + (cover - fit) * (state.zoom || 0);
     var dw = vw*scale, dh = vh*scale;
+    if(dw < cw - 1 || dh < ch - 1){
+      var bs = Math.max(bgCanvas.width/vw, bgCanvas.height/vh);
+      bgCtx.drawImage(camPreview, (bgCanvas.width - vw*bs)/2, (bgCanvas.height - vh*bs)/2, vw*bs, vh*bs);
+      recCtx.imageSmoothingEnabled = true;
+      recCtx.drawImage(bgCanvas, 0, 0, cw, ch);   // upscaled tiny frame = blurred fill
+      recCtx.fillStyle = "rgba(10,8,7,0.35)";
+      recCtx.fillRect(0, 0, cw, ch);              // slight darken so the subject pops
+    }
     recCtx.drawImage(camPreview, (cw-dw)/2, (ch-dh)/2, dw, dh);
+  }
+
+  var zoomRange = document.getElementById("zoomRange");
+  if(zoomRange){
+    zoomRange.value = Math.round(state.zoom * 100);
+    zoomRange.oninput = function(){
+      state.zoom = (+zoomRange.value) / 100;
+      try { localStorage.setItem(ZOOM_KEY, String(state.zoom)); } catch(e){}
+    };
   }
 
   function startDrawLoop(){
@@ -706,8 +748,8 @@ Deja que la IA haga lo otro.`}
     var mime = pickMime();
     var recordStream = state.stream;
     var usingCanvas = false;
-    // Recording the raw camera stream can come out landscape on iOS Safari; re-encoding
-    // via the 9:16 canvas guarantees an upright, correctly-framed vertical video.
+    // Recording the raw camera stream directly can come out landscape on iOS Safari;
+    // re-encoding via the 9:16 canvas guarantees a correctly-framed vertical video.
     if(typeof recCanvas.captureStream === "function"){
       try{
         state.canvasStream = recCanvas.captureStream(RECORD_FPS);
